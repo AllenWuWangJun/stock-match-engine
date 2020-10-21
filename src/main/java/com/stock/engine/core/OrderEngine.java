@@ -2,6 +2,7 @@ package com.stock.engine.core;
 
 import com.stock.engine.component.AbstractOrder;
 import com.stock.engine.constant.OrderDirection;
+import lombok.Data;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
 
@@ -18,15 +19,35 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * author Allen Wu
+ * 843475854@qq.com
+ * 2020/10/21
+ *
+ * @param <T>
+ */
+@Data
 public class OrderEngine<T extends AbstractOrder> {
 
+    /**
+     * what exchange the engine running on
+     */
+    private String exchangeName;
+
+    /**
+     * buy order queue
+     */
     private Map<BigDecimal, List<T>> buyOrders = new ConcurrentSkipListMap<>(
             Comparator.reverseOrder());
 
+    /**
+     * sell order queue
+     */
     private Map<BigDecimal, List<T>> sellOrders = new ConcurrentSkipListMap<>();
 
     ReentrantLock lock = new ReentrantLock();
 
+    @Deprecated
     public void printOrderBook() {
         System.out.println("");
         Set<BigDecimal> bid_prices = buyOrders.keySet();
@@ -53,6 +74,10 @@ public class OrderEngine<T extends AbstractOrder> {
 
     }
 
+    /**
+     * submit order;
+     * @param order
+     */
     public void submitOrder(T order) {
         if (OrderDirection.BUY.equals(order.getOrderDirection())) {
             if (MapUtils.isNotEmpty(sellOrders)) {
@@ -106,6 +131,7 @@ public class OrderEngine<T extends AbstractOrder> {
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             if (order.getAvailableQuantity().compareTo(currentStackQuantity) >= 0 &&
                     order.addDealQuantity(orderDealQuantity, currentStackQuantity)) {
+                //TODO Add to executed order;
                 stack.remove(marketPrice, stack.get(marketPrice));
             } else {
                 order.addDealQuantity(orderDealQuantity,
@@ -139,11 +165,13 @@ public class OrderEngine<T extends AbstractOrder> {
                 order.addDealQuantity(dealQuantity, quantity);
                 appliedQuantity = appliedQuantity.add(quantity);
                 quantity = BigDecimal.ZERO;
+                //TODO Add to executed order;
             } else {
                 appliedQuantity = appliedQuantity.add(order.getAvailableQuantity());
                 quantity = quantity.subtract(order.getAvailableQuantity());
                 order.addDealQuantity(dealQuantity, order.getAvailableQuantity());
                 orders.remove(order);
+                //TODO Add to executed order;
             }
         }
         return appliedQuantity;
