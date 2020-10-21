@@ -30,8 +30,8 @@ public class App
         OrderEngine engine = new OrderEngine();
         long n1 = System.currentTimeMillis();
         int ITERATIONS = 10000000;
-        IntStream.range(0, ITERATIONS).forEach(i -> {
-            if (i % 10000 == 0) {
+        IntStream.range(0, ITERATIONS).parallel().forEach(i -> {
+            if (i % 100000 == 0) {
                 System.out.println(i + " orders sent");
             }
             if (randomDouble.nextDouble() > 50) {

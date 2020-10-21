@@ -5,6 +5,7 @@ import com.stock.engine.constant.OrderDirection;
 import lombok.Data;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.collections4.MapUtils;
+import org.apache.commons.collections4.map.LinkedMap;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
@@ -14,7 +15,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
@@ -37,41 +41,41 @@ public class OrderEngine<T extends AbstractOrder> {
     /**
      * buy order queue
      */
-    private Map<BigDecimal, List<T>> buyOrders = new ConcurrentSkipListMap<>(
+    private Map<BigDecimal, Queue<T>> buyOrders = new ConcurrentSkipListMap<>(
             Comparator.reverseOrder());
 
     /**
      * sell order queue
      */
-    private Map<BigDecimal, List<T>> sellOrders = new ConcurrentSkipListMap<>();
+    private Map<BigDecimal, Queue<T>> sellOrders = new ConcurrentSkipListMap<>(
+            Comparator.naturalOrder());
 
     ReentrantLock lock = new ReentrantLock();
 
-    @Deprecated
-    public void printOrderBook() {
-        System.out.println("");
-        Set<BigDecimal> bid_prices = buyOrders.keySet();
-        System.out.println("____ bid ____ ");
-        int i=0,j=0;
-        for (BigDecimal bid_price : bid_prices) {
-            if (i > 10) {
+    public Map<BigDecimal, BigDecimal> getTopOrders(int level, OrderDirection orderDirection) {
+        Map<BigDecimal, BigDecimal> result = new LinkedMap<>();
+        Set<BigDecimal> prices = orderDirection.equals(OrderDirection.BUY) ? buyOrders.keySet() : sellOrders.keySet();
+        int i = 0;
+        for (BigDecimal price : prices) {
+            if (i > level) {
                 break;
             }
-            System.out.println(buyOrders.get(bid_price) + " @ " + bid_price);
+            result.put(price,
+                    orderDirection.equals(OrderDirection.BUY) ? buyOrders.get(price).stream()
+                            .map(AbstractOrder::getAvailableQuantity).reduce(BigDecimal.ZERO, BigDecimal::add) : sellOrders.get(price).stream()
+                            .map(AbstractOrder::getAvailableQuantity).reduce(BigDecimal.ZERO, BigDecimal::add));
             i++;
         }
+        return result;
+    }
 
-        Set<BigDecimal> sell_prices = sellOrders.keySet();
+    public void printOrderBook() {
+        System.out.println("");
+        System.out.println("____ bid ____ ");
+        System.out.println(getTopOrders(10, OrderDirection.BUY));
         System.out.println("____ask ____ ");
-        for (BigDecimal sell_price : sell_prices) {
-            if (j > 10) {
-                break;
-            }
-            System.out.println(sellOrders.get(sell_price) + " @ " + sell_price);
-            j++;
-        }
+        System.out.println(getTopOrders(10, OrderDirection.SELL));
         System.out.println("_____________ ");
-
     }
 
     /**
@@ -100,7 +104,7 @@ public class OrderEngine<T extends AbstractOrder> {
         }
     }
 
-    private void submitOrderToStack(T order, BigDecimal marketPrice, Map<BigDecimal, List<T>> stack) {
+    private void submitOrderToStack(T order, BigDecimal marketPrice, Map<BigDecimal, Queue<T>> stack) {
         if (order.getAvailableQuantity().signum() < 1) {
             return;
         }
@@ -120,39 +124,39 @@ public class OrderEngine<T extends AbstractOrder> {
         if (!priceMatched) {
             return;
         }
-        try {
-            BigDecimal orderDealQuantity = order.getDealQuantity().get();
-            lock.lock();
-            if (CollectionUtils.isEmpty(stack.get(marketPrice))) {
-                stack.remove(marketPrice, stack.get(marketPrice));
-                return;
-            }
-            BigDecimal currentStackQuantity = stack.get(marketPrice).stream().map(AbstractOrder::getAvailableQuantity)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            if (order.getAvailableQuantity().compareTo(currentStackQuantity) >= 0 &&
-                    order.addDealQuantity(orderDealQuantity, currentStackQuantity)) {
-                //TODO Add to executed order;
-                stack.remove(marketPrice, stack.get(marketPrice));
-            } else {
-                order.addDealQuantity(orderDealQuantity,
-                        applyQuantityForStackOrders(stack.get(marketPrice),
-                                order.getAvailableQuantity()));
-            }
-        } finally {
-            lock.unlock();
+        BigDecimal orderDealQuantity = order.getDealQuantity().get();
+        Optional<Queue<T>> priceQueue = Optional.ofNullable(stack.get(marketPrice));
+        if (priceQueue.isEmpty()) {
+            stack.remove(marketPrice, null);
+            return;
+        }
+        if (CollectionUtils.isEmpty(priceQueue.get())) {
+            stack.remove(marketPrice, priceQueue.get());
+            return;
+        }
+        BigDecimal currentStackQuantity = priceQueue.get().stream().map(AbstractOrder::getAvailableQuantity)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (order.getAvailableQuantity().compareTo(currentStackQuantity) >= 0 &&
+                order.addDealQuantity(orderDealQuantity, currentStackQuantity)) {
+            //TODO Add to executed order;
+            stack.remove(marketPrice, priceQueue.get());
+        } else {
+            order.addDealQuantity(orderDealQuantity,
+                    applyQuantityForStackOrders(priceQueue.get(),
+                            order.getAvailableQuantity()));
         }
     }
 
-    private void addToStack(T order, Map<BigDecimal, List<T>> stack) {
+    private void addToStack(T order, Map<BigDecimal, Queue<T>> stack) {
         if (Objects.isNull(stack.computeIfPresent(order.getPrice(), (k, oldValue) -> {
             oldValue.add(order);
             return oldValue;
         }))) {
-            stack.putIfAbsent(order.getPrice(), new CopyOnWriteArrayList(Arrays.asList(order)));
+            stack.putIfAbsent(order.getPrice(), new ConcurrentLinkedQueue<>(Arrays.asList(order)));
         }
     }
 
-    private BigDecimal applyQuantityForStackOrders(List<T> orders, BigDecimal quantity) {
+    private BigDecimal applyQuantityForStackOrders(Queue<T> orders, BigDecimal quantity) {
         BigDecimal appliedQuantity = BigDecimal.ZERO;
         Iterator<T> tIterator = orders.iterator();
         while (tIterator.hasNext()) {
