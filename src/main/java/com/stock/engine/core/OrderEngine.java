@@ -12,7 +12,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -20,8 +19,6 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * author Allen Wu
@@ -49,8 +46,6 @@ public class OrderEngine<T extends AbstractOrder> {
      */
     private Map<BigDecimal, Queue<T>> sellOrders = new ConcurrentSkipListMap<>(
             Comparator.naturalOrder());
-
-    ReentrantLock lock = new ReentrantLock();
 
     public Map<BigDecimal, BigDecimal> getTopOrders(int level, OrderDirection orderDirection) {
         Map<BigDecimal, BigDecimal> result = new LinkedMap<>();
@@ -130,20 +125,22 @@ public class OrderEngine<T extends AbstractOrder> {
             stack.remove(marketPrice, null);
             return;
         }
-        if (CollectionUtils.isEmpty(priceQueue.get())) {
-            stack.remove(marketPrice, priceQueue.get());
-            return;
-        }
-        BigDecimal currentStackQuantity = priceQueue.get().stream().map(AbstractOrder::getAvailableQuantity)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (order.getAvailableQuantity().compareTo(currentStackQuantity) >= 0 &&
-                order.addDealQuantity(orderDealQuantity, currentStackQuantity)) {
-            //TODO Add to executed order;
-            stack.remove(marketPrice, priceQueue.get());
-        } else {
-            order.addDealQuantity(orderDealQuantity,
-                    applyQuantityForStackOrders(priceQueue.get(),
-                            order.getAvailableQuantity()));
+        synchronized (priceQueue) {
+            if (CollectionUtils.isEmpty(priceQueue.get())) {
+                stack.remove(marketPrice, priceQueue.get());
+                return;
+            }
+            BigDecimal currentStackQuantity = priceQueue.get().stream().map(AbstractOrder::getAvailableQuantity)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (order.getAvailableQuantity().compareTo(currentStackQuantity) >= 0 &&
+                    order.addDealQuantity(orderDealQuantity, currentStackQuantity)) {
+                //TODO Add to executed order;
+                stack.remove(marketPrice, priceQueue.get());
+            } else {
+                order.addDealQuantity(orderDealQuantity,
+                        applyQuantityForStackOrders(priceQueue.get(),
+                                order.getAvailableQuantity()));
+            }
         }
     }
 
